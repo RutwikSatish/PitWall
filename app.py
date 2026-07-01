@@ -291,23 +291,23 @@ with st.sidebar:
 
 # ── Page routing ─────────────────────────────────────────────────────────────
 if page == "🏁  Race Overview":
-    from pages._race_overview import render
+    from modules.race_overview import render
     render()
 elif page == "🔴  Tyre Strategy":
-    from pages._tyre_strategy import render
+    from modules.tyre_strategy import render
     render()
 elif page == "📉  Tyre Degradation":
-    from pages._tyre_degradation import render
+    from modules.tyre_degradation import render
     render()
 elif page == "⚔️  Undercut Analyser":
-    from pages._undercut import render
+    from modules.undercut import render
     render()
 elif page == "🎲  Strategy Simulator":
-    from pages._simulator import render
+    from modules.simulator import render
     render()
 elif page == "🏎️  Team Comparison":
-    from pages._team_comparison import render
+    from modules.team_comparison import render
     render()
 elif page == "🤖  AI Analyst":
-    from pages._ai_analyst import render
+    from modules.ai_analyst import render
     render(groq_key)
