@@ -210,16 +210,17 @@ def _render_pace_distribution(laps: pd.DataFrame, pace_col: str, session):
         st.markdown("**PACE DISTRIBUTION BY TEAM**")
 
         team_laps = laps.copy()
+        # Merge team info — get_clean_laps does not preserve Team column
         try:
-            team_laps = team_laps.merge(
-                session.laps[["Driver", "LapNumber", "Team"]].drop_duplicates(),
-                on=["Driver", "LapNumber"],
-                how="left"
+            team_info = (
+                session.laps[["Driver", "Team"]]
+                .dropna(subset=["Team"])
+                .drop_duplicates(subset=["Driver"])
             )
-        except Exception:
-            if "Team" not in team_laps.columns:
-                st.info("Team data not available.")
-                return
+            team_laps = team_laps.merge(team_info, on="Driver", how="left")
+        except Exception as e:
+            st.info(f"Team data not available: {e}")
+            return
 
         team_laps = team_laps.dropna(subset=["Team", pace_col])
 
