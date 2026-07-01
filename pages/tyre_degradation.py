@@ -210,19 +210,38 @@ def _render_pace_distribution(laps: pd.DataFrame, pace_col: str, session):
         st.markdown("**PACE DISTRIBUTION BY TEAM**")
 
         team_laps = laps.copy()
-        # Merge team info — get_clean_laps does not preserve Team column
+        # Merge team info — try session.laps first, fall back to session.results
         try:
             team_info = (
                 session.laps[["Driver", "Team"]]
                 .dropna(subset=["Team"])
                 .drop_duplicates(subset=["Driver"])
             )
+            if team_info.empty:
+                raise ValueError("No team data in laps")
             team_laps = team_laps.merge(team_info, on="Driver", how="left")
-        except Exception as e:
-            st.info(f"Team data not available: {e}")
+        except Exception:
+            try:
+                team_info = (
+                    session.results[["Abbreviation", "TeamName"]]
+                    .rename(columns={"Abbreviation": "Driver", "TeamName": "Team"})
+                    .dropna()
+                    .drop_duplicates(subset=["Driver"])
+                )
+                team_laps = team_laps.merge(team_info, on="Driver", how="left")
+            except Exception as e:
+                st.info(f"Team data not available for this session: {e}")
+                return
+
+        if "Team" not in team_laps.columns or team_laps["Team"].isna().all():
+            st.info("Team column could not be merged for this session.")
             return
 
         team_laps = team_laps.dropna(subset=["Team", pace_col])
+
+        if team_laps.empty:
+            st.info("No clean laps with team data available.")
+            return
 
         # Sort teams by median pace
         team_medians = team_laps.groupby("Team")[pace_col].median().sort_values()
