@@ -7,7 +7,8 @@ import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
 import requests
-from utils.data import (
+from utils.data import (  # noqa
+
     load_session, get_race_name_list, get_clean_laps,
     TEAM_COLORS, AVAILABLE_YEARS, get_team_color, fuel_correct
 )
@@ -76,36 +77,12 @@ def _render_race_pace(available_years):
     laps = fuel_correct(laps, total_laps)
     pace_col = "LapTimeCorr"
 
-    # Merge team info — try session.laps first, fall back to session.results
-    try:
-        team_info = (
-            session.laps[["Driver", "Team"]]
-            .dropna(subset=["Team"])
-            .drop_duplicates(subset=["Driver"])
-        )
-        if team_info.empty:
-            raise ValueError("empty")
-        laps = laps.merge(team_info, on="Driver", how="left")
-    except Exception:
-        try:
-            team_info = (
-                session.results[["Abbreviation", "TeamName"]]
-                .rename(columns={"Abbreviation": "Driver", "TeamName": "Team"})
-                .dropna()
-                .drop_duplicates(subset=["Driver"])
-            )
-            laps = laps.merge(team_info, on="Driver", how="left")
-        except Exception as e:
-            st.warning(f"Could not attach team names: {e}")
-            return
-
-    if "Team" not in laps.columns or laps["Team"].isna().all():
-        st.warning("Team data unavailable for this session.")
-        return
-
+    # Enrich with team data using all available sources
+    laps = enrich_laps_with_teams(laps, session)
+    laps = laps[laps["Team"] != "Unknown"]
     laps = laps.dropna(subset=["Team", pace_col])
     if laps.empty:
-        st.warning("No clean laps with team data found.")
+        st.warning("No clean laps with team data found for this session.")
         return
 
     # Team summary stats
