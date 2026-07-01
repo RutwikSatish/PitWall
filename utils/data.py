@@ -192,42 +192,62 @@ def enrich_laps_with_teams(laps: pd.DataFrame, session) -> pd.DataFrame:
 
 def get_pit_stops(session) -> pd.DataFrame:
     """
-    Return pit stop DataFrame with columns:
-    Driver, LapNumber, StopTime, Team, Compound
-    
-    Priority: FastF1 PitInTime/PitOutTime > OpenF1 /pit endpoint > Jolpica
+    Return pit stop DataFrame: Driver, LapNumber, StopTime (s), Team.
+    Tries 3 sources in order: FastF1 laps → OpenF1 API → Jolpica.
     """
 
-    # 1. FastF1 native pit data
+    # ── 1. FastF1: compute stop time from pit-out lap duration ────────────────
+    # FastF1 stores PitInTime/PitOutTime as timedeltas from session start.
+    # StopTime = PitOutTime(next_lap) - PitInTime(pit_lap)
+    # Alternatively: the out-lap's PitOutTime - the in-lap's PitInTime
     try:
         laps = session.laps.copy()
-        pit_laps = laps[laps["PitInTime"].notna()].copy()
-        pit_laps["StopTime"] = (
-            laps["PitOutTime"] - laps["PitInTime"]
-        ).dt.total_seconds()
-        valid = pit_laps[pit_laps["StopTime"].between(1.5, 60)].copy()
+        # Method A: direct PitInTime / PitOutTime on same lap row
+        pit_laps = laps[laps["PitInTime"].notna() & laps["PitOutTime"].notna()].copy()
+        if not pit_laps.empty:
+            pit_laps["StopTime"] = (
+                pit_laps["PitOutTime"] - pit_laps["PitInTime"]
+            ).dt.total_seconds()
+            valid = pit_laps[pit_laps["StopTime"].between(1.5, 60)].copy()
+            if not valid.empty:
+                team_map = get_team_map(session)
+                valid["Team"] = valid["Driver"].map(team_map).fillna("Unknown")
+                cols = ["Driver", "LapNumber", "StopTime", "Team"]
+                if "Compound" in valid.columns:
+                    cols.append("Compound")
+                return valid[cols].reset_index(drop=True)
 
-        if not valid.empty:
-            team_map = get_team_map(session)
-            valid["Team"] = valid["Driver"].map(team_map).fillna("Unknown")
-            cols = [c for c in ["Driver", "LapNumber", "StopTime", "Team", "Compound"] if c in valid.columns]
-            return valid[cols].reset_index(drop=True)
+        # Method B: PitInTime on lap N, PitOutTime on lap N+1
+        pit_in = laps[laps["PitInTime"].notna()][["Driver","LapNumber","PitInTime"]].copy()
+        pit_out = laps[laps["PitOutTime"].notna()][["Driver","LapNumber","PitOutTime"]].copy()
+        if not pit_in.empty and not pit_out.empty:
+            pit_out["LapNumber"] = pit_out["LapNumber"] - 1  # align to in-lap
+            merged = pit_in.merge(pit_out, on=["Driver","LapNumber"])
+            merged["StopTime"] = (merged["PitOutTime"] - merged["PitInTime"]).dt.total_seconds()
+            valid = merged[merged["StopTime"].between(1.5, 60)].copy()
+            if not valid.empty:
+                team_map = get_team_map(session)
+                valid["Team"] = valid["Driver"].map(team_map).fillna("Unknown")
+                return valid[["Driver","LapNumber","StopTime","Team"]].reset_index(drop=True)
     except Exception:
         pass
 
-    # 2. OpenF1 /pit endpoint — requires session_key, field is stop_duration
+    # ── 2. OpenF1 /pit — get session_key first ────────────────────────────────
     try:
-        # Get session_key from FastF1 session object
+        # FastF1 stores the session key in session_info
         session_key = None
         try:
-            session_key = session.session_info.get("Key") or session._session_key
+            info = session.session_info
+            session_key = info.get("Key") or info.get("SessionKey")
         except Exception:
             pass
+
         if not session_key:
+            # Fall back: query OpenF1 sessions endpoint
             try:
-                year = session.event["EventDate"].year
-                gp_round = int(session.event["RoundNumber"])
-                s_url = f"https://api.openf1.org/v1/sessions?year={year}&meeting_key={gp_round}&session_name=Race"
+                year = int(session.event["EventDate"].year)
+                country = str(session.event.get("Country", ""))
+                s_url = f"https://api.openf1.org/v1/sessions?year={year}&country_name={country}&session_type=Race"
                 sr = requests.get(s_url, timeout=8)
                 if sr.status_code == 200 and sr.json():
                     session_key = sr.json()[0].get("session_key")
@@ -236,10 +256,9 @@ def get_pit_stops(session) -> pd.DataFrame:
 
         if session_key:
             url = f"https://api.openf1.org/v1/pit?session_key={session_key}"
-            r = requests.get(url, timeout=10)
+            r = requests.get(url, timeout=12)
             if r.status_code == 200 and r.json():
-                pit_data = r.json()
-                df = pd.DataFrame(pit_data)
+                df = pd.DataFrame(r.json())
                 if not df.empty and "pit_duration" in df.columns:
                     df = df.rename(columns={
                         "driver_number": "DriverNum",
@@ -247,39 +266,36 @@ def get_pit_stops(session) -> pd.DataFrame:
                         "pit_duration": "StopTime",
                     })
                     df["StopTime"] = pd.to_numeric(df["StopTime"], errors="coerce")
-                    df = df[df["StopTime"].between(1.5, 60)]
-                    # Map driver number → abbreviation
-                    try:
-                        num_map = dict(zip(
-                            session.results["DriverNumber"].astype(str),
-                            session.results["Abbreviation"]
-                        ))
-                        df["Driver"] = df["DriverNum"].astype(str).map(num_map).fillna("???")
-                    except Exception:
-                        df["Driver"] = df["DriverNum"].astype(str)
-                    team_map = get_team_map(session)
-                    df["Team"] = df["Driver"].map(team_map).fillna("Unknown")
-                    return df[["Driver", "LapNumber", "StopTime", "Team"]].reset_index(drop=True)
+                    df = df[df["StopTime"].between(1.5, 60)].copy()
+                    if not df.empty:
+                        try:
+                            num_map = dict(zip(
+                                session.results["DriverNumber"].astype(str),
+                                session.results["Abbreviation"]
+                            ))
+                            df["Driver"] = df["DriverNum"].astype(str).map(num_map).fillna("???")
+                        except Exception:
+                            df["Driver"] = df["DriverNum"].astype(str)
+                        team_map = get_team_map(session)
+                        df["Team"] = df["Driver"].map(team_map).fillna("Unknown")
+                        return df[["Driver","LapNumber","StopTime","Team"]].reset_index(drop=True)
     except Exception:
         pass
 
-    # 3. Jolpica fallback
+    # ── 3. Jolpica (Ergast) fallback ──────────────────────────────────────────
     try:
-        year = session.event["EventDate"].year
+        year = int(session.event["EventDate"].year)
         gp_round = int(session.event["RoundNumber"])
-        url = f"https://api.jolpi.ca/ergast/f1/{year}/{gp_round}/pitstops.json?limit=100"
-        r = requests.get(url, timeout=10)
+        url = f"https://api.jolpi.ca/ergast/f1/{year}/{gp_round}/pitstops.json?limit=200"
+        r = requests.get(url, timeout=12)
         if r.status_code == 200:
             data = r.json()
-            stops = data["MRData"]["RaceTable"]["Races"]
-            if stops:
-                pit_list = stops[0].get("PitStops", [])
+            races = data["MRData"]["RaceTable"]["Races"]
+            if races:
                 rows = []
-                for p in pit_list:
-                    # duration is a string like "25.627"
+                for p in races[0].get("PitStops", []):
                     try:
                         raw = p.get("duration", "0")
-                        # Ergast format: "1:23.456" or "23.456"
                         if ":" in str(raw):
                             parts = str(raw).split(":")
                             duration = int(parts[0]) * 60 + float(parts[1])
@@ -287,21 +303,22 @@ def get_pit_stops(session) -> pd.DataFrame:
                             duration = float(raw)
                     except Exception:
                         duration = 0
-                    rows.append({
-                        "Driver": p.get("driverId", "").upper()[:3],
-                        "LapNumber": int(p.get("lap", 0)),
-                        "StopTime": duration,
-                        "Team": "Unknown",
-                    })
-                df = pd.DataFrame(rows)
-                df = df[df["StopTime"].between(1.5, 60)]
-                team_map = get_team_map(session)
-                df["Team"] = df["Driver"].map(team_map).fillna("Unknown")
-                return df.reset_index(drop=True)
+                    if 1.5 <= duration <= 60:
+                        rows.append({
+                            "Driver": p.get("driverId","").upper()[:3],
+                            "LapNumber": int(p.get("lap", 0)),
+                            "StopTime": round(duration, 3),
+                            "Team": "Unknown",
+                        })
+                if rows:
+                    df = pd.DataFrame(rows)
+                    team_map = get_team_map(session)
+                    df["Team"] = df["Driver"].map(team_map).fillna("Unknown")
+                    return df.reset_index(drop=True)
     except Exception:
         pass
 
-    return pd.DataFrame(columns=["Driver", "LapNumber", "StopTime", "Team"])
+    return pd.DataFrame(columns=["Driver","LapNumber","StopTime","Team"])
 
 
 # ── Lap cleaning ─────────────────────────────────────────────────────────────
