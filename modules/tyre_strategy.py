@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 import pandas as pd
 from utils.data import (
     load_session, get_race_name_list, COMPOUND_COLORS,
-    get_team_color, AVAILABLE_YEARS
+    get_team_color, AVAILABLE_YEARS, get_pit_stops
 )
 from utils.plots import apply_base, empty_fig
 
@@ -179,23 +179,19 @@ def _render_compound_summary(session):
 def _render_pit_stops_table(session):
     """Table of all pit stops with stationary time."""
     try:
-        laps = session.laps.copy()
-        pit_laps = laps[laps["PitInTime"].notna()].copy()
+        pit_df = get_pit_stops(session)
 
-        if pit_laps.empty:
+        if pit_df.empty:
+            st.info("No pit stop data available for this session.")
             return
 
-        pit_laps["StationaryTime"] = (
-            (laps["PitOutTime"] - laps["PitInTime"])
-            .dt.total_seconds()
-        )
-
-        pit_table = pit_laps[["Driver", "LapNumber", "Compound", "StationaryTime", "Team"]].copy()
-        pit_table = pit_table.dropna(subset=["StationaryTime"])
-        pit_table = pit_table[pit_table["StationaryTime"].between(1.5, 60)]  # filter bogus values
-        pit_table["StationaryTime"] = pit_table["StationaryTime"].round(2)
-        pit_table = pit_table.sort_values("StationaryTime")
-        pit_table.columns = ["Driver", "Lap", "New Compound", "Stop Time (s)", "Team"]
+        pit_df["StopTime"] = pit_df["StopTime"].round(2)
+        pit_df = pit_df.sort_values("StopTime")
+        pit_table = pit_df.copy()
+        # Normalise column names for display
+        if "Compound" not in pit_table.columns:
+            pit_table["Compound"] = "UNKNOWN"
+        pit_table = pit_table.rename(columns={"StopTime": "Stop Time (s)", "LapNumber": "Lap"})
 
         st.markdown('<hr style="border:none;border-top:1px solid #222;margin:1.5rem 0;">', unsafe_allow_html=True)
         st.markdown("**PIT STOP TIMES** (sorted fastest first)")
