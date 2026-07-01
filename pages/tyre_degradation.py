@@ -191,7 +191,7 @@ def _render_deg_by_driver(laps: pd.DataFrame, pace_col: str, pace_label: str, se
                     line=dict(color=comp_color, width=2.5 if is_cadillac else 1.5),
                     marker=dict(size=4, color=comp_color),
                     legendgroup=drv,
-                    showlegend=(stint_num == drv_laps["Stint"].min()),
+                    showlegend=bool(stint_num == drv_laps["Stint"].min()),
                     hovertemplate=f"<b>{drv}</b> (Stint {int(stint_num)})<br>Lap %{{x}}<br>{pace_label}: %{{y:.3f}}s<extra></extra>",
                 ))
 
