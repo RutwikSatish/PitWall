@@ -193,43 +193,12 @@ def _render_pit_stops_table(session):
             pit_table["Compound"] = "UNKNOWN"
         pit_table = pit_table.rename(columns={"StopTime": "Stop Time (s)", "LapNumber": "Lap"})
 
-        st.markdown('<hr style="border:none;border-top:1px solid #222;margin:1.5rem 0;">', unsafe_allow_html=True)
         st.markdown("**PIT STOP TIMES** (sorted fastest first)")
 
-        rows_html = []
-        for _, row in pit_table.head(25).iterrows():
-            compound = str(row.get("New Compound", "")).upper()
-            comp_color = COMPOUND_COLORS.get(compound, "#888")
-            team_color = get_team_color(str(row["Team"]))
-            stop_t = row["Stop Time (s)"]
-
-            # Colour code: green <2.5s, yellow 2.5-3.5s, red >3.5s
-            if stop_t < 2.5:
-                t_color = "#39FF14"
-            elif stop_t < 3.5:
-                t_color = "#FFD700"
-            else:
-                t_color = "#E8002D"
-
-            rows_html.append(f"""
-            <div style="display:flex;align-items:center;padding:5px 0;border-bottom:1px solid #1a1a1a;font-size:0.82rem;">
-                <span style="display:inline-block;width:3px;height:14px;background:{team_color};margin-right:8px;border-radius:1px;"></span>
-                <span style="width:50px;font-family:'JetBrains Mono',monospace;">{row['Driver']}</span>
-                <span style="flex:1;color:#888;font-size:0.75rem;">{row['Team']}</span>
-                <span style="width:50px;text-align:center;font-family:'JetBrains Mono',monospace;font-size:0.75rem;color:#888;">L{int(row['Lap'])}</span>
-                <span style="width:80px;text-align:center;">
-                    <span style="background:{comp_color};color:{"#000" if compound in ["MEDIUM","HARD","INTERMEDIATE"] else "#fff"};
-                    padding:1px 6px;border-radius:2px;font-size:0.65rem;">{compound}</span>
-                </span>
-                <span style="width:70px;text-align:right;font-family:'JetBrains Mono',monospace;font-weight:700;color:{t_color};">{stop_t:.2f}s</span>
-            </div>
-            """)
-
-        st.markdown(
-            '<div style="background:#111;border:1px solid #222;border-radius:4px;padding:0.5rem 1rem;">'
-            + "".join(rows_html)
-            + "</div>",
-            unsafe_allow_html=True,
-        )
+        display = pit_table[["Driver","Team","Lap","Stop Time (s)"]].copy()
+        if "Compound" in pit_table.columns:
+            display.insert(2, "Compound", pit_table["Compound"].fillna("UNKNOWN").str.upper())
+        display["Stop Time (s)"] = display["Stop Time (s)"].apply(lambda x: f"{x:.2f}s")
+        st.dataframe(display.head(25).set_index("Driver"), use_container_width=True)
     except Exception as e:
         st.warning(f"Pit stop table unavailable: {e}")
