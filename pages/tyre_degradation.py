@@ -1,14 +1,13 @@
 """
-pages/tyre_degradation.py — Deg curves, slope estimation, fuel-corrected pace
+pages/tyre_strategy.py — Horizontal stint timeline coloured by compound
 """
 
 import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
-import numpy as np
 from utils.data import (
     load_session, get_race_name_list, COMPOUND_COLORS,
-    get_team_color, AVAILABLE_YEARS, get_clean_laps, fuel_correct
+    get_team_color, AVAILABLE_YEARS
 )
 from utils.plots import apply_base, empty_fig
 
@@ -17,266 +16,224 @@ def render():
     st.markdown("""
     <div style="margin-bottom:1.5rem;">
         <div style="font-family:'Exo 2',sans-serif;font-weight:900;font-size:2rem;letter-spacing:-0.03em;">
-            Tyre Degradation
+            Tyre Strategy
         </div>
         <div style="font-family:'JetBrains Mono',monospace;font-size:0.7rem;color:#666;text-transform:uppercase;letter-spacing:0.1em;">
-            Degradation slope · Fuel-corrected pace · Compound comparison
+            Stint timeline · Compound sequence · Pit windows
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-    c1, c2, c3 = st.columns([1, 2, 1])
+    c1, c2 = st.columns([1, 2])
     with c1:
-        year = st.selectbox("Season", AVAILABLE_YEARS, key="deg_year")
+        year = st.selectbox("Season", AVAILABLE_YEARS, key="ts_year")
     with c2:
         races = get_race_name_list(year)
         if not races:
             st.warning("Could not load schedule.")
             return
-        gp = st.selectbox("Grand Prix", races, index=min(7, len(races)-1), key="deg_gp")
-    with c3:
-        fuel_corr = st.checkbox("Apply fuel correction", value=True,
-                                help="Removes ~0.057s/lap fuel-mass effect from lap times")
+        gp = st.selectbox("Grand Prix", races, index=min(7, len(races)-1), key="ts_gp")
 
-    with st.spinner(f"Loading {gp} {year}…"):
+    with st.spinner(f"Loading tyre data for {gp} {year}…"):
         session = load_session(year, gp, "R")
 
     if session is None:
         st.warning("Race data not available.")
         return
 
-    laps = get_clean_laps(session)
-    if laps.empty:
-        st.warning("No clean laps found.")
-        return
-
-    total_laps = int(laps["LapNumber"].max())
-    if fuel_corr:
-        laps = fuel_correct(laps, total_laps)
-        pace_col = "LapTimeCorr"
-        pace_label = "Fuel-Corrected Lap Time (s)"
-    else:
-        pace_col = "LapTimeSec"
-        pace_label = "Lap Time (s)"
-
-    _render_deg_curves(laps, pace_col, pace_label)
-    _render_deg_by_driver(laps, pace_col, pace_label, session)
-    _render_pace_distribution(laps, pace_col, session)
+    _render_strategy_timeline(session)
+    _render_compound_summary(session)
+    _render_pit_stops_table(session)
 
 
-def _render_deg_curves(laps: pd.DataFrame, pace_col: str, pace_label: str):
-    """Median lap time vs tyre age per compound with linear regression."""
+def _render_strategy_timeline(session):
+    """Horizontal stacked bar chart per driver showing compound stints."""
     try:
-        laps = laps.copy()
+        laps = session.laps[["Driver", "LapNumber", "Compound", "Stint", "Team", "PitInTime"]].copy()
         laps["Compound"] = laps["Compound"].fillna("UNKNOWN").str.upper()
 
-        fig = go.Figure()
-        slope_info = []
-
-        for compound in ["SOFT", "MEDIUM", "HARD"]:
-            cdf = laps[laps["Compound"] == compound].copy()
-            if len(cdf) < 5:
-                continue
-
-            # Median per tyre age
-            med = cdf.groupby("TyreLife")[pace_col].median().reset_index()
-            med = med[med["TyreLife"].between(1, 50)]
-            if len(med) < 3:
-                continue
-
-            color = COMPOUND_COLORS[compound]
-            text_color = "#000" if compound in ["MEDIUM", "HARD"] else "#fff"
-
-            fig.add_trace(go.Scatter(
-                x=med["TyreLife"],
-                y=med[pace_col],
-                mode="markers+lines",
-                name=compound,
-                line=dict(color=color, width=2),
-                marker=dict(color=color, size=5),
-                hovertemplate=f"<b>{compound}</b><br>Tyre age: %{{x}} laps<br>Median: %{{y:.3f}}s<extra></extra>",
-            ))
-
-            # Linear regression for slope
-            if len(med) >= 4:
-                x = med["TyreLife"].values
-                y = med[pace_col].values
-                coeffs = np.polyfit(x, y, 1)
-                slope = coeffs[0]
-                slope_info.append({"compound": compound, "slope": slope, "color": color, "text_color": text_color})
-
-                # Add trend line
-                y_trend = np.polyval(coeffs, x)
-                fig.add_trace(go.Scatter(
-                    x=x, y=y_trend,
-                    mode="lines",
-                    name=f"{compound} trend",
-                    line=dict(color=color, width=1.5, dash="dot"),
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-
-        fig.update_layout(yaxis_title=pace_label, xaxis_title="Tyre Age (laps)")
-        apply_base(fig, "Tyre Degradation Curves", height=400)
-        st.plotly_chart(fig, use_container_width=True)
-
-        # Degradation slope cards
-        if slope_info:
-            st.markdown("**DEGRADATION RATE** (s/lap — positive = getting slower)")
-            cols = st.columns(len(slope_info))
-            for i, info in enumerate(slope_info):
-                with cols[i]:
-                    slope_val = info["slope"]
-                    sign = "+" if slope_val > 0 else ""
-                    severity = "Low" if abs(slope_val) < 0.05 else ("Medium" if abs(slope_val) < 0.12 else "High")
-                    sev_color = "#39FF14" if severity == "Low" else ("#FFD700" if severity == "Medium" else "#E8002D")
-                    st.markdown(f"""
-                    <div class="metric-card" style="border-left-color:{info['color']};">
-                        <div class="label">{info['compound']}</div>
-                        <div class="value" style="font-family:'JetBrains Mono',monospace;">{sign}{slope_val:.4f}s</div>
-                        <div class="delta" style="color:{sev_color};">{severity} degradation</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-    except Exception as e:
-        st.warning(f"Degradation curves unavailable: {e}")
-
-
-def _render_deg_by_driver(laps: pd.DataFrame, pace_col: str, pace_label: str, session):
-    """Individual driver pace evolution over the race."""
-    try:
-        st.markdown('<hr style="border:none;border-top:1px solid #222;margin:1.5rem 0;">', unsafe_allow_html=True)
-        st.markdown("**DRIVER PACE EVOLUTION**")
-
-        # Driver multiselect — default to top 6 finishers or Cadillac drivers
-        all_drivers = sorted(laps["Driver"].unique())
-        cadillac_drivers = [d for d in all_drivers if d in ["PER", "BOT"]]
-        default_drivers = cadillac_drivers + [d for d in all_drivers if d not in cadillac_drivers][:4]
-
-        selected = st.multiselect(
-            "Select drivers",
-            all_drivers,
-            default=default_drivers[:6],
-            key="deg_drivers",
+        # Build stint summary
+        stints = (
+            laps.groupby(["Driver", "Stint", "Compound", "Team"])
+            .agg(start_lap=("LapNumber", "min"), end_lap=("LapNumber", "max"))
+            .reset_index()
         )
-        if not selected:
-            return
+        stints["stint_len"] = stints["end_lap"] - stints["start_lap"] + 1
+
+        # Sort drivers: winners first, Cadillac highlighted
+        try:
+            results = session.results[["Abbreviation", "Position"]].dropna()
+            results["Position"] = pd.to_numeric(results["Position"], errors="coerce")
+            driver_order = results.sort_values("Position")["Abbreviation"].tolist()
+        except Exception:
+            driver_order = stints["Driver"].unique().tolist()
+
+        # Reverse for Plotly (bottom = P1)
+        driver_order_rev = list(reversed(driver_order))
 
         fig = go.Figure()
 
-        for drv in selected:
-            drv_laps = laps[laps["Driver"] == drv].sort_values("LapNumber")
-            if drv_laps.empty:
+        # Add invisible base bar for positioning
+        for drv in driver_order_rev:
+            drv_stints = stints[stints["Driver"] == drv].sort_values("start_lap")
+            if drv_stints.empty:
                 continue
 
-            try:
-                team = session.laps[session.laps["Driver"] == drv]["Team"].iloc[0]
-            except Exception:
-                team = "Unknown"
+            for _, stint in drv_stints.iterrows():
+                compound = stint["Compound"]
+                color = COMPOUND_COLORS.get(compound, "#888888")
+                team = stint["Team"]
+                t_color = get_team_color(str(team))
 
-            color = get_team_color(str(team))
-            is_cadillac = "cadillac" in str(team).lower()
+                # Make Cadillac bars slightly taller
+                is_cadillac = "cadillac" in str(team).lower()
 
-            # Group by stint for gap between stints
-            for stint_num in drv_laps["Stint"].unique():
-                stint_laps = drv_laps[drv_laps["Stint"] == stint_num]
-                compound = stint_laps["Compound"].iloc[0] if "Compound" in stint_laps else "UNKNOWN"
-                comp_color = COMPOUND_COLORS.get(str(compound).upper(), color)
-
-                fig.add_trace(go.Scatter(
-                    x=stint_laps["LapNumber"],
-                    y=stint_laps[pace_col],
-                    mode="lines+markers",
-                    name=f"{drv} S{int(stint_num)}",
-                    line=dict(color=comp_color, width=2.5 if is_cadillac else 1.5),
-                    marker=dict(size=4, color=comp_color),
-                    legendgroup=drv,
-                    showlegend=bool(stint_num == drv_laps["Stint"].min()),
-                    hovertemplate=f"<b>{drv}</b> (Stint {int(stint_num)})<br>Lap %{{x}}<br>{pace_label}: %{{y:.3f}}s<extra></extra>",
+                fig.add_trace(go.Bar(
+                    y=[drv],
+                    x=[stint["stint_len"]],
+                    base=stint["start_lap"] - 1,
+                    orientation="h",
+                    name=compound,
+                    legendgroup=compound,
+                    showlegend=(drv == driver_order_rev[0]),
+                    marker=dict(
+                        color=color,
+                        opacity=0.9 if is_cadillac else 0.7,
+                        line=dict(color=t_color if is_cadillac else "#0A0A0A", width=2 if is_cadillac else 0.5),
+                    ),
+                    hovertemplate=(
+                        f"<b>{drv}</b><br>"
+                        f"Compound: {compound}<br>"
+                        f"Laps {int(stint['start_lap'])}–{int(stint['end_lap'])} "
+                        f"({int(stint['stint_len'])} laps)<extra></extra>"
+                    ),
                 ))
-
-        fig.update_layout(yaxis_title=pace_label, xaxis_title="Lap Number")
-        apply_base(fig, "Driver Pace Evolution by Stint", height=420)
-        st.plotly_chart(fig, use_container_width=True)
-
-    except Exception as e:
-        st.warning(f"Driver pace evolution unavailable: {e}")
-
-
-def _render_pace_distribution(laps: pd.DataFrame, pace_col: str, session):
-    """Box plot of pace distribution per team."""
-    try:
-        st.markdown('<hr style="border:none;border-top:1px solid #222;margin:1.5rem 0;">', unsafe_allow_html=True)
-        st.markdown("**PACE DISTRIBUTION BY TEAM**")
-
-        team_laps = laps.copy()
-        # Merge team info — try session.laps first, fall back to session.results
-        try:
-            team_info = (
-                session.laps[["Driver", "Team"]]
-                .dropna(subset=["Team"])
-                .drop_duplicates(subset=["Driver"])
-            )
-            if team_info.empty:
-                raise ValueError("No team data in laps")
-            team_laps = team_laps.merge(team_info, on="Driver", how="left")
-        except Exception:
-            try:
-                team_info = (
-                    session.results[["Abbreviation", "TeamName"]]
-                    .rename(columns={"Abbreviation": "Driver", "TeamName": "Team"})
-                    .dropna()
-                    .drop_duplicates(subset=["Driver"])
-                )
-                team_laps = team_laps.merge(team_info, on="Driver", how="left")
-            except Exception as e:
-                st.info(f"Team data not available for this session: {e}")
-                return
-
-        if "Team" not in team_laps.columns or team_laps["Team"].isna().all():
-            st.info("Team column could not be merged for this session.")
-            return
-
-        team_laps = team_laps.dropna(subset=["Team", pace_col])
-
-        if team_laps.empty:
-            st.info("No clean laps with team data available.")
-            return
-
-        # Sort teams by median pace
-        team_medians = team_laps.groupby("Team")[pace_col].median().sort_values()
-        sorted_teams = team_medians.index.tolist()
-
-        fig = go.Figure()
-        for team in sorted_teams:
-            tdf = team_laps[team_laps["Team"] == team]
-            color = get_team_color(team)
-            is_cadillac = "cadillac" in team.lower()
-
-            fig.add_trace(go.Box(
-                y=tdf[pace_col],
-                name=team,
-                marker_color=color,
-                line=dict(color=color, width=2.5 if is_cadillac else 1.5),
-                fillcolor=color + "33",
-                boxmean=True,
-                hovertemplate=f"<b>{team}</b><br>%{{y:.3f}}s<extra></extra>",
-            ))
 
         fig.update_layout(
-            yaxis_title="Lap Time (s)",
-            xaxis_title="",
-            showlegend=False,
+            barmode="overlay",
+            xaxis_title="Lap Number",
+            yaxis=dict(
+                title="Driver",
+                categoryorder="array",
+                categoryarray=driver_order_rev,
+            ),
+            legend=dict(
+                title="Compound",
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="left",
+                x=0,
+            ),
         )
-        apply_base(fig, "Pace Distribution by Team (clean laps only)", height=420)
+        apply_base(fig, "Race Tyre Strategy", height=max(400, len(driver_order_rev) * 28 + 100))
         st.plotly_chart(fig, use_container_width=True)
 
-        st.markdown(
-            '<div style="font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#555;">'
-            'In/out laps, SC laps, and laps >110% of median excluded. Box = IQR, line = median, dot = mean.'
-            '</div>',
-            unsafe_allow_html=True
-        )
+        # Compound legend badges
+        st.markdown("**Compound key:**  " + "  ".join([
+            f'<span style="background:{v};color:{"#000" if k in ["MEDIUM","HARD","INTERMEDIATE"] else "#fff"};'
+            f'padding:2px 8px;border-radius:2px;font-family:JetBrains Mono,monospace;font-size:0.7rem;">{k}</span>'
+            for k, v in COMPOUND_COLORS.items() if k not in ["UNKNOWN", "TEST_UNKNOWN"]
+        ]), unsafe_allow_html=True)
 
     except Exception as e:
-        st.warning(f"Pace distribution unavailable: {e}")
+        st.warning(f"Strategy timeline unavailable: {e}")
+
+
+def _render_compound_summary(session):
+    """Summary: how many drivers used each compound."""
+    try:
+        laps = session.laps[["Driver", "Compound"]].dropna()
+        laps["Compound"] = laps["Compound"].str.upper()
+
+        summary = (
+            laps.groupby("Compound")["Driver"]
+            .nunique()
+            .reset_index()
+            .rename(columns={"Driver": "Drivers"})
+            .sort_values("Drivers", ascending=False)
+        )
+
+        st.markdown('<hr style="border:none;border-top:1px solid #222;margin:1.5rem 0;">', unsafe_allow_html=True)
+        st.markdown("**COMPOUND USAGE**")
+
+        cols = st.columns(len(summary))
+        for i, (_, row) in enumerate(summary.iterrows()):
+            compound = row["Compound"]
+            color = COMPOUND_COLORS.get(compound, "#888")
+            text_color = "#000" if compound in ["MEDIUM", "HARD", "INTERMEDIATE"] else "#fff"
+            with cols[i]:
+                st.markdown(f"""
+                <div class="metric-card" style="border-left-color:{color};text-align:center;">
+                    <div style="background:{color};color:{text_color};padding:4px 8px;border-radius:2px;
+                         font-family:'JetBrains Mono',monospace;font-size:0.7rem;font-weight:600;
+                         display:inline-block;margin-bottom:0.5rem;">{compound}</div>
+                    <div class="value">{int(row['Drivers'])}</div>
+                    <div class="delta">drivers used</div>
+                </div>
+                """, unsafe_allow_html=True)
+    except Exception:
+        pass
+
+
+def _render_pit_stops_table(session):
+    """Table of all pit stops with stationary time."""
+    try:
+        laps = session.laps.copy()
+        pit_laps = laps[laps["PitInTime"].notna()].copy()
+
+        if pit_laps.empty:
+            return
+
+        pit_laps["StationaryTime"] = (
+            (laps["PitOutTime"] - laps["PitInTime"])
+            .dt.total_seconds()
+        )
+
+        pit_table = pit_laps[["Driver", "LapNumber", "Compound", "StationaryTime", "Team"]].copy()
+        pit_table = pit_table.dropna(subset=["StationaryTime"])
+        pit_table = pit_table[pit_table["StationaryTime"].between(1.5, 60)]  # filter bogus values
+        pit_table["StationaryTime"] = pit_table["StationaryTime"].round(2)
+        pit_table = pit_table.sort_values("StationaryTime")
+        pit_table.columns = ["Driver", "Lap", "New Compound", "Stop Time (s)", "Team"]
+
+        st.markdown('<hr style="border:none;border-top:1px solid #222;margin:1.5rem 0;">', unsafe_allow_html=True)
+        st.markdown("**PIT STOP TIMES** (sorted fastest first)")
+
+        rows_html = []
+        for _, row in pit_table.head(25).iterrows():
+            compound = str(row.get("New Compound", "")).upper()
+            comp_color = COMPOUND_COLORS.get(compound, "#888")
+            team_color = get_team_color(str(row["Team"]))
+            stop_t = row["Stop Time (s)"]
+
+            # Colour code: green <2.5s, yellow 2.5-3.5s, red >3.5s
+            if stop_t < 2.5:
+                t_color = "#39FF14"
+            elif stop_t < 3.5:
+                t_color = "#FFD700"
+            else:
+                t_color = "#E8002D"
+
+            rows_html.append(f"""
+            <div style="display:flex;align-items:center;padding:5px 0;border-bottom:1px solid #1a1a1a;font-size:0.82rem;">
+                <span style="display:inline-block;width:3px;height:14px;background:{team_color};margin-right:8px;border-radius:1px;"></span>
+                <span style="width:50px;font-family:'JetBrains Mono',monospace;">{row['Driver']}</span>
+                <span style="flex:1;color:#888;font-size:0.75rem;">{row['Team']}</span>
+                <span style="width:50px;text-align:center;font-family:'JetBrains Mono',monospace;font-size:0.75rem;color:#888;">L{int(row['Lap'])}</span>
+                <span style="width:80px;text-align:center;">
+                    <span style="background:{comp_color};color:{"#000" if compound in ["MEDIUM","HARD","INTERMEDIATE"] else "#fff"};
+                    padding:1px 6px;border-radius:2px;font-size:0.65rem;">{compound}</span>
+                </span>
+                <span style="width:70px;text-align:right;font-family:'JetBrains Mono',monospace;font-weight:700;color:{t_color};">{stop_t:.2f}s</span>
+            </div>
+            """)
+
+        st.markdown(
+            '<div style="background:#111;border:1px solid #222;border-radius:4px;padding:0.5rem 1rem;">'
+            + "".join(rows_html)
+            + "</div>",
+            unsafe_allow_html=True,
+        )
+    except Exception as e:
+        st.warning(f"Pit stop table unavailable: {e}")
