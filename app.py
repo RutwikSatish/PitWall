@@ -1,4 +1,7 @@
 import streamlit as st
+import sys
+import os
+sys.path.insert(0, os.path.dirname(__file__))
 
 st.set_page_config(
     page_title="PitWall — F1 Strategy Intelligence",
@@ -288,23 +291,23 @@ with st.sidebar:
 
 # ── Page routing ─────────────────────────────────────────────────────────────
 if page == "🏁  Race Overview":
-    from views.race_overview import render
+    from pages.race_overview import render
     render()
 elif page == "🔴  Tyre Strategy":
-    from views.tyre_strategy import render
+    from pages.tyre_strategy import render
     render()
 elif page == "📉  Tyre Degradation":
-    from views.tyre_degradation import render
+    from pages.tyre_degradation import render
     render()
 elif page == "⚔️  Undercut Analyser":
-    from views.undercut import render
+    from pages.undercut import render
     render()
 elif page == "🎲  Strategy Simulator":
-    from views.simulator import render
+    from pages.simulator import render
     render()
 elif page == "🏎️  Team Comparison":
-    from views.team_comparison import render
+    from pages.team_comparison import render
     render()
 elif page == "🤖  AI Analyst":
-    from views.ai_analyst import render
+    from pages.ai_analyst import render
     render(groq_key)
