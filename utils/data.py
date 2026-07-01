@@ -215,34 +215,51 @@ def get_pit_stops(session) -> pd.DataFrame:
     except Exception:
         pass
 
-    # 2. OpenF1 /pit endpoint
+    # 2. OpenF1 /pit endpoint — requires session_key, field is stop_duration
     try:
-        year = session.event["EventDate"].year
-        gp_round = int(session.event["RoundNumber"])
-        url = f"https://api.openf1.org/v1/pit?year={year}&meeting_key={gp_round}"
-        r = requests.get(url, timeout=10)
-        if r.status_code == 200 and r.json():
-            pit_data = r.json()
-            df = pd.DataFrame(pit_data)
-            if not df.empty and "pit_duration" in df.columns:
-                df = df.rename(columns={
-                    "driver_number": "DriverNum",
-                    "lap_number": "LapNumber",
-                    "pit_duration": "StopTime",
-                })
-                df = df[df["StopTime"].between(1.5, 60)]
-                # Map driver number to abbreviation via session
-                try:
-                    num_map = dict(zip(
-                        session.results["DriverNumber"].astype(str),
-                        session.results["Abbreviation"]
-                    ))
-                    df["Driver"] = df["DriverNum"].astype(str).map(num_map).fillna("???")
-                except Exception:
-                    df["Driver"] = df["DriverNum"].astype(str)
-                team_map = get_team_map(session)
-                df["Team"] = df["Driver"].map(team_map).fillna("Unknown")
-                return df[["Driver", "LapNumber", "StopTime", "Team"]].reset_index(drop=True)
+        # Get session_key from FastF1 session object
+        session_key = None
+        try:
+            session_key = session.session_info.get("Key") or session._session_key
+        except Exception:
+            pass
+        if not session_key:
+            try:
+                year = session.event["EventDate"].year
+                gp_round = int(session.event["RoundNumber"])
+                s_url = f"https://api.openf1.org/v1/sessions?year={year}&meeting_key={gp_round}&session_name=Race"
+                sr = requests.get(s_url, timeout=8)
+                if sr.status_code == 200 and sr.json():
+                    session_key = sr.json()[0].get("session_key")
+            except Exception:
+                pass
+
+        if session_key:
+            url = f"https://api.openf1.org/v1/pit?session_key={session_key}"
+            r = requests.get(url, timeout=10)
+            if r.status_code == 200 and r.json():
+                pit_data = r.json()
+                df = pd.DataFrame(pit_data)
+                if not df.empty and "pit_duration" in df.columns:
+                    df = df.rename(columns={
+                        "driver_number": "DriverNum",
+                        "lap_number": "LapNumber",
+                        "pit_duration": "StopTime",
+                    })
+                    df["StopTime"] = pd.to_numeric(df["StopTime"], errors="coerce")
+                    df = df[df["StopTime"].between(1.5, 60)]
+                    # Map driver number → abbreviation
+                    try:
+                        num_map = dict(zip(
+                            session.results["DriverNumber"].astype(str),
+                            session.results["Abbreviation"]
+                        ))
+                        df["Driver"] = df["DriverNum"].astype(str).map(num_map).fillna("???")
+                    except Exception:
+                        df["Driver"] = df["DriverNum"].astype(str)
+                    team_map = get_team_map(session)
+                    df["Team"] = df["Driver"].map(team_map).fillna("Unknown")
+                    return df[["Driver", "LapNumber", "StopTime", "Team"]].reset_index(drop=True)
     except Exception:
         pass
 
@@ -261,7 +278,13 @@ def get_pit_stops(session) -> pd.DataFrame:
                 for p in pit_list:
                     # duration is a string like "25.627"
                     try:
-                        duration = float(p.get("duration", "0").replace(":", ""))
+                        raw = p.get("duration", "0")
+                        # Ergast format: "1:23.456" or "23.456"
+                        if ":" in str(raw):
+                            parts = str(raw).split(":")
+                            duration = int(parts[0]) * 60 + float(parts[1])
+                        else:
+                            duration = float(raw)
                     except Exception:
                         duration = 0
                     rows.append({
