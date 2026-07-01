@@ -6,10 +6,10 @@ import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
-from utils.data import (  # noqa
-
+from utils.data import (
     load_session, get_race_name_list, COMPOUND_COLORS,
-    get_team_color, AVAILABLE_YEARS, get_clean_laps, fuel_correct
+    get_team_color, AVAILABLE_YEARS, get_clean_laps, fuel_correct,
+    enrich_laps_with_teams
 )
 from utils.plots import apply_base, empty_fig
 
