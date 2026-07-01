@@ -76,23 +76,37 @@ def _render_race_pace(available_years):
     laps = fuel_correct(laps, total_laps)
     pace_col = "LapTimeCorr"
 
-    # Merge team info — get_clean_laps does not preserve Team column
+    # Merge team info — try session.laps first, fall back to session.results
     try:
         team_info = (
             session.laps[["Driver", "Team"]]
             .dropna(subset=["Team"])
             .drop_duplicates(subset=["Driver"])
         )
+        if team_info.empty:
+            raise ValueError("empty")
         laps = laps.merge(team_info, on="Driver", how="left")
-    except Exception as e:
-        st.warning(f"Could not attach team names: {e}")
-        return
+    except Exception:
+        try:
+            team_info = (
+                session.results[["Abbreviation", "TeamName"]]
+                .rename(columns={"Abbreviation": "Driver", "TeamName": "Team"})
+                .dropna()
+                .drop_duplicates(subset=["Driver"])
+            )
+            laps = laps.merge(team_info, on="Driver", how="left")
+        except Exception as e:
+            st.warning(f"Could not attach team names: {e}")
+            return
 
     if "Team" not in laps.columns or laps["Team"].isna().all():
         st.warning("Team data unavailable for this session.")
         return
 
     laps = laps.dropna(subset=["Team", pace_col])
+    if laps.empty:
+        st.warning("No clean laps with team data found.")
+        return
 
     # Team summary stats
     team_stats = (
