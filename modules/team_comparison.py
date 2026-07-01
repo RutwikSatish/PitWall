@@ -130,32 +130,16 @@ def _render_race_pace(available_years):
 
     # Gap table
     st.markdown("**PACE GAP TO FASTEST TEAM**")
-    rows_html = []
+    gap_rows = []
     for _, row in team_stats.iterrows():
-        color = get_team_color(row["Team"])
         gap = row["Median"] - best_pace
-        is_cadillac = "cadillac" in row["Team"].lower()
-        border = "2px solid #CC1E4A" if is_cadillac else "none"
-
-        rows_html.append(f"""
-        <div style="display:flex;align-items:center;padding:6px 0;border-bottom:1px solid #1a1a1a;
-             font-size:0.82rem;{f'outline:{border};outline-offset:-1px;background:#1a0a0a;padding:6px 8px;' if is_cadillac else ''}">
-            <span style="display:inline-block;width:4px;height:14px;background:{color};margin-right:10px;border-radius:1px;"></span>
-            <span style="flex:1;">{row['Team']}{' ⬅' if is_cadillac else ''}</span>
-            <span style="width:80px;font-family:'JetBrains Mono',monospace;color:#888;font-size:0.75rem;">{int(row['Laps'])} laps</span>
-            <span style="width:70px;text-align:right;font-family:'JetBrains Mono',monospace;
-                 color:{'#39FF14' if gap < 0.1 else ('#FFD700' if gap < 0.8 else '#E8002D')};">
-                {'+' if gap > 0 else ''}{gap:.3f}s
-            </span>
-        </div>
-        """)
-
-    st.markdown(
-        '<div style="background:#111;border:1px solid #222;border-radius:4px;padding:0.5rem 1rem;">'
-        + "".join(rows_html)
-        + "</div>",
-        unsafe_allow_html=True,
-    )
+        gap_rows.append({
+            "Team": row["Team"] + (" ◀" if "cadillac" in row["Team"].lower() else ""),
+            "Clean Laps": int(row["Laps"]),
+            "Median Pace (s)": round(row["Median"], 3),
+            "Gap to Leader": f"+{gap:.3f}s" if gap > 0 else "FASTEST",
+        })
+    st.dataframe(pd.DataFrame(gap_rows).set_index("Team"), use_container_width=True)
 
 
 def _render_pit_consistency(available_years):
@@ -249,28 +233,20 @@ def _render_pit_consistency(available_years):
 
         # Table
         st.markdown("**PIT STOP STATISTICS**")
-        rows_html = []
-        for _, row in team_pit.iterrows():
-            color = get_team_color(row["Team"])
-            is_cadillac = "cadillac" in row["Team"].lower()
-            rows_html.append(f"""
-            <div style="display:flex;align-items:center;padding:6px 0;border-bottom:1px solid #1a1a1a;font-size:0.82rem;
-                 {'background:#1a0a0a;padding:6px 8px;' if is_cadillac else ''}">
-                <span style="display:inline-block;width:4px;height:14px;background:{color};margin-right:10px;border-radius:1px;"></span>
-                <span style="flex:1;">{row['Team']}</span>
-                <span style="width:70px;text-align:right;font-family:'JetBrains Mono',monospace;">{row['AvgStop']:.2f}s</span>
-                <span style="width:70px;text-align:right;font-family:'JetBrains Mono',monospace;color:#888;">±{row['StdDev']:.2f}s</span>
-                <span style="width:70px;text-align:right;font-family:'JetBrains Mono',monospace;color:#39FF14;">{row['BestStop']:.2f}s</span>
-                <span style="width:50px;text-align:right;color:#555;font-size:0.75rem;">{int(row['Stops'])} stops</span>
-            </div>
-            """)
-
-        st.markdown(
-            '<div style="background:#111;border:1px solid #222;border-radius:4px;padding:0.5rem 1rem;">'
-            + "".join(rows_html)
-            + "</div>",
-            unsafe_allow_html=True,
+        pit_display = team_pit.copy()
+        pit_display["Team"] = pit_display["Team"].apply(
+            lambda t: t + " ◀" if "cadillac" in t.lower() else t
         )
+        pit_display = pit_display.rename(columns={
+            "AvgStop": "Avg Stop (s)",
+            "StdDev": "Std Dev (s)",
+            "BestStop": "Best Stop (s)",
+            "Stops": "# Stops",
+        })
+        pit_display["Avg Stop (s)"] = pit_display["Avg Stop (s)"].round(2)
+        pit_display["Std Dev (s)"] = pit_display["Std Dev (s)"].round(2)
+        pit_display["Best Stop (s)"] = pit_display["Best Stop (s)"].round(2)
+        st.dataframe(pit_display[["Team","Avg Stop (s)","Std Dev (s)","Best Stop (s)","# Stops"]].set_index("Team"), use_container_width=True)
 
     except Exception as e:
         st.warning(f"Pit consistency data unavailable: {e}")
