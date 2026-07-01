@@ -1,5 +1,5 @@
 """
-pages/race_overview.py — Championship standings + race position trace
+modules/race_overview.py — Championship standings + race position trace
 """
 
 import streamlit as st
@@ -8,9 +8,9 @@ import pandas as pd
 from utils.data import (
     get_event_schedule, load_session, get_clean_laps,
     get_standings, TEAM_COLORS, AVAILABLE_YEARS, get_race_name_list,
-    get_team_color
+    get_team_color, get_team_map
 )
-from utils.plots import apply_base, empty_fig
+from utils.plots import apply_base
 
 
 def render():
@@ -32,19 +32,20 @@ def render():
     with c2:
         races = get_race_name_list(year)
         if not races:
-            st.warning("Could not load race schedule. Check internet connection.")
+            st.warning("Could not load race schedule.")
             return
         gp = st.selectbox("Grand Prix", races, index=min(7, len(races)-1), key="ov_gp")
 
-    # ── Standings ──────────────────────────────────────────────────────────
     st.markdown('<hr style="border:none;border-top:1px solid #222;margin:1rem 0;">', unsafe_allow_html=True)
-
-    with st.spinner("Loading championship standings…"):
-        drivers, constructors = get_standings(year)
 
     tab_standings, tab_race = st.tabs(["CHAMPIONSHIP STANDINGS", "RACE POSITION TRACE"])
 
+    # ── Standings tab ──────────────────────────────────────────────────────
     with tab_standings:
+        # Pass year explicitly so cache key changes when year changes
+        with st.spinner("Loading championship standings…"):
+            drivers, constructors = get_standings(year)
+
         if not drivers and not constructors:
             st.info("Standings not available for this selection.")
         else:
@@ -62,8 +63,7 @@ def render():
                             "Points": d["points"],
                             "Wins": d["wins"],
                         })
-                    df = pd.DataFrame(rows)
-                    _render_standings_table(df, "Team")
+                    _render_standings_table(pd.DataFrame(rows))
 
             with col_c:
                 st.markdown("**CONSTRUCTORS' CHAMPIONSHIP**")
@@ -76,16 +76,16 @@ def render():
                             "Points": c["points"],
                             "Wins": c["wins"],
                         })
-                    df = pd.DataFrame(rows)
-                    _render_standings_table(df, "Team")
+                    _render_standings_table(pd.DataFrame(rows))
 
-            # Bar chart constructors
             if constructors:
-                fig = _constructors_bar(constructors)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(_constructors_bar(constructors), use_container_width=True)
 
+    # ── Race tab ───────────────────────────────────────────────────────────
     with tab_race:
-        with st.spinner(f"Loading {gp} {year} race data…"):
+        # Use a unique key combining year+gp so spinner re-fires on change
+        cache_key = f"{year}_{gp}"
+        with st.spinner(f"Loading {gp} {year}…"):
             session = load_session(year, gp, "R")
 
         if session is None:
@@ -96,14 +96,15 @@ def render():
         _render_results_table(session)
 
 
-def _render_standings_table(df: pd.DataFrame, team_col: str):
-    """Render standings using st.dataframe to avoid HTML rendering issues on Streamlit Cloud."""
+def _render_standings_table(df: pd.DataFrame):
     display_cols = [c for c in ["Pos", "Driver", "Team", "Points", "Wins"] if c in df.columns]
     st.dataframe(
         df[display_cols].set_index("Pos"),
         use_container_width=True,
         hide_index=False,
     )
+
+
 def _constructors_bar(constructors: list) -> go.Figure:
     names = [c["Constructor"]["name"] for c in constructors]
     points = [int(c["points"]) for c in constructors]
@@ -119,41 +120,35 @@ def _constructors_bar(constructors: list) -> go.Figure:
         textfont=dict(family="JetBrains Mono", size=10, color="#fff"),
         hovertemplate="<b>%{y}</b><br>Points: %{x}<extra></extra>",
     ))
-    fig.update_layout(
-        yaxis=dict(autorange="reversed"),
-        xaxis_title="Points",
-    )
+    fig.update_layout(yaxis=dict(autorange="reversed"), xaxis_title="Points")
     apply_base(fig, "Constructors' Championship", height=380)
     return fig
 
 
 def _render_position_trace(session):
-    """Lap-by-lap position chart."""
     try:
-        laps = session.laps[["Driver", "LapNumber", "Position", "Team"]].dropna(subset=["Position"])
+        laps = session.laps[["Driver", "LapNumber", "Position"]].dropna(subset=["Position"])
         if laps.empty:
             st.info("Position data not available for this race.")
             return
 
+        # Get team map from all available sources
+        team_map = get_team_map(session)
+
         fig = go.Figure()
-        drivers = laps["Driver"].unique()
-
-        for drv in drivers:
+        for drv in laps["Driver"].unique():
             drv_laps = laps[laps["Driver"] == drv].sort_values("LapNumber")
-            team = drv_laps["Team"].iloc[0] if "Team" in drv_laps.columns else "Unknown"
-            color = get_team_color(str(team))
-
-            # Highlight Cadillac drivers
-            width = 3 if team == "Cadillac" else 1.5
-            opacity = 1.0 if team == "Cadillac" else 0.6
+            team = team_map.get(drv, "Unknown")
+            color = get_team_color(team)
+            is_cadillac = "cadillac" in team.lower()
 
             fig.add_trace(go.Scatter(
                 x=drv_laps["LapNumber"],
                 y=drv_laps["Position"],
                 mode="lines",
                 name=drv,
-                line=dict(color=color, width=width),
-                opacity=opacity,
+                line=dict(color=color, width=3 if is_cadillac else 1.5),
+                opacity=1.0 if is_cadillac else 0.6,
                 hovertemplate=f"<b>{drv}</b> ({team})<br>Lap %{{x}}<br>P%{{y}}<extra></extra>",
             ))
 
@@ -169,47 +164,38 @@ def _render_position_trace(session):
 
 
 def _render_results_table(session):
-    """Race results summary table."""
     try:
-        results = session.results[["FullName", "TeamName", "GridPosition", "Position", "Points", "Status"]].copy()
+        results = session.results[
+            ["FullName", "TeamName", "GridPosition", "Position", "Points", "Status"]
+        ].copy()
         results = results.sort_values("Position")
         results.columns = ["Driver", "Team", "Grid", "Finish", "Points", "Status"]
 
         st.markdown("**RACE RESULT**")
-        rows_html = []
+        rows = []
         for _, row in results.iterrows():
-            color = get_team_color(str(row["Team"]))
-            finish = int(row["Finish"]) if pd.notna(row["Finish"]) else "—"
-            grid = int(row["Grid"]) if pd.notna(row["Grid"]) else "—"
-            change = ""
-            if isinstance(finish, int) and isinstance(grid, int):
+            finish = int(row["Finish"]) if pd.notna(row["Finish"]) else None
+            grid   = int(row["Grid"])   if pd.notna(row["Grid"])   else None
+            pts    = float(row["Points"]) if pd.notna(row["Points"]) else 0
+
+            if finish and grid:
                 delta = grid - finish
-                if delta > 0:
-                    change = f'<span style="color:#39FF14;">▲{delta}</span>'
-                elif delta < 0:
-                    change = f'<span style="color:#E8002D;">▼{abs(delta)}</span>'
-                else:
-                    change = '<span style="color:#666;">—</span>'
+                change = f"▲{delta}" if delta > 0 else (f"▼{abs(delta)}" if delta < 0 else "—")
+            else:
+                change = "—"
 
-            pts = int(row["Points"]) if pd.notna(row["Points"]) and float(row["Points"]) > 0 else ""
-            pts_html = f'<span style="color:#E8002D;font-weight:700;">{pts}</span>' if pts else ""
+            rows.append({
+                "Pos":    f"P{finish}" if finish else "—",
+                "Driver": row["Driver"],
+                "Team":   row["Team"],
+                "Grid":   f"P{grid}" if grid else "—",
+                "Δ Pos":  change,
+                "Points": int(pts) if pts > 0 else "",
+                "Status": row["Status"],
+            })
 
-            rows_html.append(f"""
-            <div style="display:flex;align-items:center;padding:5px 0;border-bottom:1px solid #1a1a1a;font-size:0.82rem;">
-                <span style="width:32px;font-family:'JetBrains Mono',monospace;color:#666;font-size:0.75rem;">P{finish}</span>
-                <span style="display:inline-block;width:3px;height:14px;background:{color};margin-right:8px;border-radius:1px;"></span>
-                <span style="flex:1;">{row['Driver']}</span>
-                <span style="width:140px;color:#888;font-size:0.75rem;">{row['Team']}</span>
-                <span style="width:50px;text-align:center;">{change}</span>
-                <span style="width:40px;text-align:right;">{pts_html}</span>
-            </div>
-            """)
+        df = pd.DataFrame(rows)
+        st.dataframe(df.set_index("Pos"), use_container_width=True, hide_index=False)
 
-        st.markdown(
-            '<div style="background:#111;border:1px solid #222;border-radius:4px;padding:0.5rem 1rem;">'
-            + "".join(rows_html)
-            + "</div>",
-            unsafe_allow_html=True,
-        )
     except Exception as e:
         st.warning(f"Results table unavailable: {e}")
