@@ -6,7 +6,8 @@ import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
-from utils.data import (
+from utils.data import (  # noqa
+
     load_session, get_race_name_list, COMPOUND_COLORS,
     get_team_color, AVAILABLE_YEARS, get_clean_laps, fuel_correct
 )
@@ -210,35 +211,10 @@ def _render_pace_distribution(laps: pd.DataFrame, pace_col: str, session):
         st.markdown("**PACE DISTRIBUTION BY TEAM**")
 
         team_laps = laps.copy()
-        # Merge team info — try session.laps first, fall back to session.results
-        try:
-            team_info = (
-                session.laps[["Driver", "Team"]]
-                .dropna(subset=["Team"])
-                .drop_duplicates(subset=["Driver"])
-            )
-            if team_info.empty:
-                raise ValueError("No team data in laps")
-            team_laps = team_laps.merge(team_info, on="Driver", how="left")
-        except Exception:
-            try:
-                team_info = (
-                    session.results[["Abbreviation", "TeamName"]]
-                    .rename(columns={"Abbreviation": "Driver", "TeamName": "Team"})
-                    .dropna()
-                    .drop_duplicates(subset=["Driver"])
-                )
-                team_laps = team_laps.merge(team_info, on="Driver", how="left")
-            except Exception as e:
-                st.info(f"Team data not available for this session: {e}")
-                return
-
-        if "Team" not in team_laps.columns or team_laps["Team"].isna().all():
-            st.info("Team column could not be merged for this session.")
-            return
-
+        # Enrich with team data using all available sources
+        team_laps = enrich_laps_with_teams(team_laps, session)
+        team_laps = team_laps[team_laps["Team"] != "Unknown"]
         team_laps = team_laps.dropna(subset=["Team", pace_col])
-
         if team_laps.empty:
             st.info("No clean laps with team data available.")
             return
