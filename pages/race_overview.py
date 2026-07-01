@@ -97,39 +97,13 @@ def render():
 
 
 def _render_standings_table(df: pd.DataFrame, team_col: str):
-    """Render a styled standings table."""
-    styled_rows = []
-    for _, row in df.iterrows():
-        team_color = get_team_color(str(row.get(team_col, "")))
-        pos = row["Pos"]
-        medal = "🥇" if pos == "1" else ("🥈" if pos == "2" else ("🥉" if pos == "3" else f"P{pos}"))
-
-        if team_col in row:
-            team_html = f'<span style="display:inline-block;width:4px;height:12px;background:{team_color};margin-right:6px;border-radius:1px;vertical-align:middle;"></span>{row[team_col]}'
-        else:
-            team_html = ""
-
-        row_html = f"""
-        <div style="display:flex;align-items:center;padding:6px 0;border-bottom:1px solid #1a1a1a;font-size:0.85rem;">
-            <span style="width:40px;font-family:'JetBrains Mono',monospace;font-size:0.75rem;color:#666;">{medal}</span>
-            <span style="flex:1;">{row.get('Driver', row.get('Team',''))}</span>
-        """
-        if "Team" in row and team_col != "Team":
-            row_html += f'<span style="flex:1;font-size:0.75rem;color:#888;">{team_html}</span>'
-        row_html += f"""
-            <span style="width:60px;text-align:right;font-family:'JetBrains Mono',monospace;font-weight:600;color:#E8002D;">{row['Points']}</span>
-        </div>
-        """
-        styled_rows.append(row_html)
-
-    st.markdown(
-        '<div style="background:#111;border:1px solid #222;border-radius:4px;padding:0.5rem 1rem;">'
-        + "".join(styled_rows)
-        + "</div>",
-        unsafe_allow_html=True,
+    """Render standings using st.dataframe to avoid HTML rendering issues on Streamlit Cloud."""
+    display_cols = [c for c in ["Pos", "Driver", "Team", "Points", "Wins"] if c in df.columns]
+    st.dataframe(
+        df[display_cols].set_index("Pos"),
+        use_container_width=True,
+        hide_index=False,
     )
-
-
 def _constructors_bar(constructors: list) -> go.Figure:
     names = [c["Constructor"]["name"] for c in constructors]
     points = [int(c["points"]) for c in constructors]
