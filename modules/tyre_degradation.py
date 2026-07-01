@@ -234,7 +234,9 @@ def _render_pace_distribution(laps: pd.DataFrame, pace_col: str, session):
                 name=team,
                 marker_color=color,
                 line=dict(color=color, width=2.5 if is_cadillac else 1.5),
-                fillcolor=color + "33",
+                fillcolor="rgba({},{},{},0.2)".format(
+                    int(color[1:3],16), int(color[3:5],16), int(color[5:7],16)
+                ) if color.startswith("#") and len(color)==7 else "rgba(100,100,100,0.2)",
                 boxmean=True,
                 hovertemplate=f"<b>{team}</b><br>%{{y:.3f}}s<extra></extra>",
             ))
