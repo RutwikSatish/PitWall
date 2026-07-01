@@ -248,12 +248,27 @@ with st.sidebar:
     st.markdown('<hr class="section-rule">', unsafe_allow_html=True)
 
     st.markdown('<div class="pitwall-sub" style="margin-bottom:0.5rem;">API Keys</div>', unsafe_allow_html=True)
-    groq_key = st.text_input("Groq API Key", type="password", placeholder="gsk_...", help="Required for AI Analyst tab. Free at console.groq.com")
 
-    if groq_key:
-        import os
-        os.environ["GROQ_API_KEY"] = groq_key
+    import os
+    # Auto-load from Streamlit secrets
+    try:
+        _secret_key = st.secrets.get("GROQ_API_KEY", "")
+    except Exception:
+        _secret_key = ""
+
+    if _secret_key:
+        os.environ["GROQ_API_KEY"] = _secret_key
+        groq_key = _secret_key
         st.success("✓ Groq connected", icon="🔑")
+    else:
+        groq_key = st.text_input(
+            "Groq API Key", type="password",
+            placeholder="gsk_...",
+            help="Required for AI Analyst. Free at console.groq.com"
+        )
+        if groq_key:
+            os.environ["GROQ_API_KEY"] = groq_key
+            st.success("✓ Groq connected", icon="🔑")
 
     st.markdown('<hr class="section-rule">', unsafe_allow_html=True)
     st.markdown("""
