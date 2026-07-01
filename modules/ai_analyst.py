@@ -119,6 +119,7 @@ def render(groq_key: str = ""):
         with cols[i % 3]:
             if st.button(prompt, key=f"qp_{i}"):
                 st.session_state["ai_input"] = prompt
+                st.rerun()
 
     # ── Chat interface ────────────────────────────────────────────────────
     st.markdown('<hr style="border:none;border-top:1px solid #222;margin:1.5rem 0;">', unsafe_allow_html=True)
@@ -134,10 +135,15 @@ def render(groq_key: str = ""):
         else:
             st.markdown(f'<div class="chat-ai">{msg["content"]}</div>', unsafe_allow_html=True)
 
+    # Auto-send if quick prompt was clicked
+    pending = st.session_state.pop("ai_input", "")
+    if pending:
+        st.session_state["ai_pending"] = pending
+
     # Input
     user_input = st.text_input(
         "Ask the analyst…",
-        value=st.session_state.pop("ai_input", ""),
+        value="",
         placeholder="e.g. Was a 2-stop the right call? How can Cadillac score their first point?",
         key="ai_chat_input",
     )
@@ -148,10 +154,13 @@ def render(groq_key: str = ""):
     with col_clear:
         if st.button("Clear chat", key="ai_clear"):
             st.session_state["ai_messages"] = []
+            st.session_state.pop("ai_pending", None)
             st.rerun()
 
-    if send and user_input.strip():
-        _handle_chat(user_input.strip(), context_str, groq_key)
+    # Fire from quick prompt or manual send
+    to_send = st.session_state.pop("ai_pending", None) or (user_input.strip() if send else None)
+    if to_send:
+        _handle_chat(to_send, context_str, groq_key)
 
 
 def _build_race_context(session, gp: str, year: int) -> str:
